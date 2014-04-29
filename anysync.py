@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 
 import configparser
 import json
@@ -69,15 +69,14 @@ def download(config, student, username, taskname, revision, svnpath):
             config['COURSE']['svn'],
             '/'.join([username, svnpath]))
 
-        code = subprocess.call(" ".join([
-                "svn checkout",
-                "--force",
-                "--username {}".format(config['AUTH']['username']),
-                "--password {}".format(config['AUTH']['password']),
-                "'{}'".format(url),
-                "'{}'".format(path)
-            ]), shell=True
-        )
+        code = subprocess.call(["svn", "checkout",
+                                "--force",
+                                "--username", config['AUTH']['username'],
+                                "--password", config['AUTH']['password'],
+                                url,
+                                path,
+        ])
+
 
         if code != 0:
             debug("Error {}".format(code), level=4)
@@ -87,79 +86,83 @@ def download(config, student, username, taskname, revision, svnpath):
 
     debug("OK", level=4)
 
-
-config = configparser.ConfigParser()
-config_file = sys.argv[1] if len(sys.argv) > 1 else 'anysync.conf'
-parsed = config.read(config_file)
-if parsed == []:
-    error(1, "can't load config file '{}'".format(config_file))
-
-
-try:
-    pass_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-    pass_mgr.add_password(
-        None,
-        config['AUTH']['anytaskurl'],
-        config['AUTH']['username'],
-        config['AUTH']['password'])
-except KeyError:
-    error(2, "can't read data for authentication")
-
-urllib.request.install_opener(
-    urllib.request.build_opener(
-        urllib.request.HTTPBasicAuthHandler(pass_mgr)))
+def main():
+    config = configparser.ConfigParser()
+    config_file = sys.argv[1] if len(sys.argv) > 1 else 'anysync.conf'
+    parsed = config.read(config_file)
+    if parsed == []:
+        error(1, "can't load config file '{}'".format(config_file))
 
 
-try:
-    courses = config['COURSE']['ids'].split(',')
-except KeyError:
-    error(3, "can't read courses information")
-
-
-json_data = []
-for course in courses:
     try:
-        with urllib.request.urlopen(
-            urllib.parse.urljoin(
-                config['AUTH']['anytaskurl'],
-                '/'.join(['course', "{}?format=json".format(course)])
-            )) as f:
-            json_data.append((course, json.loads(f.read().decode('utf8'))))
-    except ValueError as e:
-        warn("can't load course #{}".format(course), e)
-    except (urllib.error.HTTPError, urllib.error.URLError) as e:
-        warn("can't load course #{}".format(course), e)
+        pass_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        pass_mgr.add_password(
+            None,
+            config['AUTH']['anytaskurl'],
+            config['AUTH']['username'],
+            config['AUTH']['password'])
+    except KeyError:
+        error(2, "can't read data for authentication")
+
+    urllib.request.install_opener(
+        urllib.request.build_opener(
+            urllib.request.HTTPBasicAuthHandler(pass_mgr)))
 
 
-_tasks = {}
-for (course, item) in json_data:
-    for task in item['tasks']:
-        _tasks[task['task_id']] = [task['parent_task_id'], task['title']]
-
-tasks = {item[0]: normalize(item[1], _tasks) for item in _tasks.items()}
+    try:
+        courses = config['COURSE']['ids'].split(',')
+    except KeyError:
+        error(3, "can't read courses information")
 
 
-for (course, item) in json_data:
-    debug("Checking course {}".format(course), level=0)
-    for task in item['tasks']:
-        task_name = tasks[task['task_id']]
-        debug("Checking task '{}'".format(task_name), level=1)
+    json_data = []
+    for course in courses:
+        try:
+            with urllib.request.urlopen(
+                urllib.parse.urljoin(
+                    config['AUTH']['anytaskurl'],
+                    '/'.join(['course', "{}?format=json".format(course)])
+                )) as f:
+                json_data.append((course, json.loads(f.read().decode('utf8'))))
+        except ValueError as e:
+            warn("can't load course #{}".format(course), e)
+        except (urllib.error.HTTPError, urllib.error.URLError) as e:
+            warn("can't load course #{}".format(course), e)
 
-        for student in task['students']:
-            student_name = student['user_name']
-            user_name = student['username']
-            debug("Checking student '{}'".format(student_name), level=2)
 
-            svn = student['svn']
-            if svn is None:
-                debug("SVN not found. Skip", level=3)
-                continue
+    _tasks = {}
+    for (course, item) in json_data:
+        for task in item['tasks']:
+            _tasks[task['task_id']] = [task['parent_task_id'], task['title']]
 
-            svn_rev = svn['svn_rev']
-            svn_path = svn['svn_path']
-            if svn_path is None:
-                debug("SVN path is not specified. Skip", level=3)
-                continue
+    tasks = {item[0]: normalize(item[1], _tasks) for item in _tasks.items()}
 
-            download(
-                config, student_name, user_name, task_name, svn_rev, svn_path)
+
+    for (course, item) in json_data:
+        debug("Checking course {}".format(course), level=0)
+        for task in item['tasks']:
+            task_name = tasks[task['task_id']]
+            debug("Checking task '{}'".format(task_name), level=1)
+
+            for student in task['students']:
+                student_name = student['user_name']
+                user_name = student['username']
+                debug("Checking student '{}'".format(student_name), level=2)
+
+                svn = student['svn']
+                if svn is None:
+                    debug("SVN not found. Skip", level=3)
+                    continue
+
+                svn_rev = svn['svn_rev']
+                svn_path = svn['svn_path']
+                if svn_path is None:
+                    debug("SVN path is not specified. Skip", level=3)
+                    continue
+
+                download(
+                    config, student_name, user_name, task_name, svn_rev, svn_path)
+
+if __name__ == "__main__":
+    main()
+
