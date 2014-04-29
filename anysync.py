@@ -69,15 +69,14 @@ def download(config, student, username, taskname, revision, svnpath):
             config['COURSE']['svn'],
             '/'.join([username, svnpath]))
 
-        code = subprocess.call(" ".join([
-                "svn checkout",
-                "--force",
-                "--username {}".format(config['AUTH']['username']),
-                "--password {}".format(config['AUTH']['password']),
-                "'{}'".format(url),
-                "'{}'".format(path)
-            ]), shell=True
-        )
+        code = subprocess.call(["svn", "checkout",
+                                "--force",
+                                "--username", config['AUTH']['username'],
+                                "--password", config['AUTH']['password'],
+                                url,
+                                path,
+        ])
+
 
         if code != 0:
             debug("Error {}".format(code), level=4)
