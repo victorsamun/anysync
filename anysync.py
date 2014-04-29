@@ -39,7 +39,7 @@ def check_cache(path, revision):
     last_rev = -1
 
     if os.path.exists(filename):
-       with open(filename) as f:
+        with open(filename) as f:
             last_rev = f.read().strip()
 
     current_rev = str(revision)
@@ -69,14 +69,14 @@ def download(config, student, username, taskname, revision, svnpath):
             config['COURSE']['svn'],
             '/'.join([username, svnpath]))
 
-        code = subprocess.call(["svn", "checkout",
-                                "--force",
-                                "--username", config['AUTH']['username'],
-                                "--password", config['AUTH']['password'],
-                                url,
-                                path,
+        code = subprocess.call([
+            "svn", "checkout",
+            "--force",
+            "--username", config['AUTH']['username'],
+            "--password", config['AUTH']['password'],
+            url,
+            path,
         ])
-
 
         if code != 0:
             debug("Error {}".format(code), level=4)
@@ -86,13 +86,13 @@ def download(config, student, username, taskname, revision, svnpath):
 
     debug("OK", level=4)
 
+
 def main():
     config = configparser.ConfigParser()
     config_file = sys.argv[1] if len(sys.argv) > 1 else 'anysync.conf'
     parsed = config.read(config_file)
     if parsed == []:
         error(1, "can't load config file '{}'".format(config_file))
-
 
     try:
         pass_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
@@ -108,12 +108,10 @@ def main():
         urllib.request.build_opener(
             urllib.request.HTTPBasicAuthHandler(pass_mgr)))
 
-
     try:
         courses = config['COURSE']['ids'].split(',')
     except KeyError:
         error(3, "can't read courses information")
-
 
     json_data = []
     for course in courses:
@@ -129,14 +127,12 @@ def main():
         except (urllib.error.HTTPError, urllib.error.URLError) as e:
             warn("can't load course #{}".format(course), e)
 
-
     _tasks = {}
     for (course, item) in json_data:
         for task in item['tasks']:
             _tasks[task['task_id']] = [task['parent_task_id'], task['title']]
 
     tasks = {item[0]: normalize(item[1], _tasks) for item in _tasks.items()}
-
 
     for (course, item) in json_data:
         debug("Checking course {}".format(course), level=0)
@@ -161,8 +157,11 @@ def main():
                     continue
 
                 download(
-                    config, student_name, user_name, task_name, svn_rev, svn_path)
+                    config,
+                    student_name, user_name,
+                    task_name,
+                    svn_rev, svn_path)
+
 
 if __name__ == "__main__":
     main()
-
