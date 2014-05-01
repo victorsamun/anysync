@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 
-__version__ = '0.95'
+__version__ = '0.96'
 
 
 class AnytaskTask:
@@ -234,13 +234,13 @@ class Anytask:
                 task_obj = self._tasks[(course, task_name)]
 
                 if 'students' not in task:
-                    logging.error("No students in task #%s/'%s'",
+                    logging.error("No students in task #%s:'%s'",
                         course, task_name)
                     continue
 
                 for student in task['students']:
                     if 'user_name' not in student:
-                        logging.error("Invalid student in task #%s/'%s'",
+                        logging.error("Invalid student in task #%s:'%s'",
                             course, task_name)
                         continue
 
@@ -248,7 +248,7 @@ class Anytask:
 
                     if 'username' not in student:
                         logging.error(
-                            "Invalid login of student '%s' in task #%s/'%s'",
+                            "Invalid login of student '%s' in task #%s:'%s'",
                             full_name, course, task_name)
                         continue
 
@@ -277,8 +277,6 @@ class Anytask:
                                     str(student['svn']['svn_rev'])))
 
                     self._solutions.append(solution_obj)
-
-                    logging.info("Processing student complete")
 
                 logging.info("Processing task '%s' complete", task_name)
 
@@ -322,6 +320,16 @@ class Anytask:
 
         logging.info("Relocation '%s' -> '%s' added", *link)
 
+    def remove_reloc(self, link):
+        try:
+            self._config.remove_option('RELOCS', link)
+            self._save_config()
+        except Exception as e:
+            logging.error("Failed to remove relocation.\n%s", e)
+            return
+
+        logging.info("Relocation '%s' removed", link)
+
     def add_link(self, link):
         try:
             if not self._config.has_section('RB_LINKS'):
@@ -331,9 +339,10 @@ class Anytask:
             self._save_config()
         except Exception as e:
             logging.error("Failed to add link.\n%s", e)
-            return
+            return False
 
         logging.info("Link #%s to '%s' added", *link)
+        return True
 
     def get_link(self, link):
         return self.get_config_safe('RB_LINKS', link)
@@ -365,10 +374,6 @@ class Anytask:
 
 
 class AnytaskSynchronizer:
-    @staticmethod
-    def _selected(selector, *values):
-        return (selector is None) or (len(set(values) & set(selector)) != 0)
-
     def _make_destination(self, solution, forced=False):
         try:
             path = os.path.join(self._anytask.get_config('COURSE', 'name'),
@@ -385,7 +390,7 @@ class AnytaskSynchronizer:
         return path
 
     def _sync_solution(self, solution, args):
-        logging.info("Checking solution of #%s/'%s' by '%s'",
+        logging.info("Checking solution of #%s:'%s' by '%s'",
             solution.task.course_id, solution.task.name, solution.student.name)
 
         if solution.svn is None:
@@ -409,7 +414,9 @@ class AnytaskSynchronizer:
                         logging.info(
                             "Repository '%s' already downloaded. Skip", repo)
                         if args.ask_link:
-                            self._ask_add_link(solution)
+                            if self._ask_add_link(solution):
+                                logging.info("Rechecking needed")
+                                self._sync_solution(solution, args)
                         return
 
                     dest = self._make_destination(solution, True)
@@ -437,9 +444,11 @@ class AnytaskSynchronizer:
             dest = self._make_destination(solution)
 
         if dest is not None:
-            if self._download(solution, svn_path, dest):
+            if self._download(solution, svn_path, dest, args.svn_quiet):
                 if (svn_path == "") and args.ask_link:
-                    self._ask_add_link(solution)
+                    if self._ask_add_link(solution):
+                        logging.info("Rechecking needed")
+                        self._sync_solution(solution, args)
 
     def _ask_add_link(self, solution):
         def get_dirs(path, *exclude):
@@ -461,7 +470,7 @@ class AnytaskSynchronizer:
                     lambda d: os.path.join(_dir, d),
                     get_dirs(os.path.join(rootdir, _dir), '.svn'))
         except (KeyError, OSError):
-            return
+            return False
 
         print("Select path to task '{}' or enter path manually:".format(
             solution.task.name))
@@ -470,8 +479,9 @@ class AnytaskSynchronizer:
             print("{:2d} {}".format(item[0] + 1, item[1]))
 
         answer = input()
-        if (len(choices) == 1) and (answer == ''):
-            answer = '1'
+        if answer == '':
+            logging.info("Selection canceled")
+            return False
 
         try:
             answer = int(answer)
@@ -479,11 +489,14 @@ class AnytaskSynchronizer:
                 return None
             answer = choices[answer - 1]
         except ValueError:
-            pass
+            if not os.path.isdir(os.path.join(rootdir, answer)):
+                logging.error("Path '%s' is incorrect", answer)
+                sys.stderr.write("Incorrect path\n")
+                return False
 
-        self._anytask.add_link([solution.svn.review_id, answer])
+        return self._anytask.add_link([solution.svn.review_id, answer])
 
-    def _download(self, solution, svnpath, destination):
+    def _download(self, solution, svnpath, destination, quiet=False):
         logging.info("SVN '%s' found, revision %s",
             svnpath, solution.svn.revision)
 
@@ -492,16 +505,18 @@ class AnytaskSynchronizer:
                 self._anytask.get_config('COURSE', 'svn'),
                 '/'.join([solution.student.repo, svnpath]))
 
-            code = subprocess.call([
+            callargs = [
                 "svn", "checkout",
                 "--revision", solution.svn.revision,
                 "--force",
                 "--no-auth-cache",
                 "--username", self._anytask.get_config('AUTH', 'username'),
-                "--password", self._anytask.get_config('AUTH', 'password'),
-                url,
-                destination,
-            ])
+                "--password", self._anytask.get_config('AUTH', 'password')]
+            if quiet:
+                callargs.append("--quiet")
+            callargs += [url, destination]
+
+            code = subprocess.call(callargs)
 
             if code != 0:
                 logging.error("Download error: svn returns %s", code)
@@ -518,16 +533,20 @@ class AnytaskSynchronizer:
         self._forced = set()
 
     def synchronize(self, args):
+        def selected(selector, *values):
+            return ((selector is None) or
+                (len(set(values) & set(selector)) != 0))
+
         logging.info("Start synchronization")
 
         for solution in filter(
             lambda solution:
-                AnytaskSynchronizer._selected(args.course,
-                   solution.task.course_id) and
-                AnytaskSynchronizer._selected(args.task,
-                   solution.task.name, solution.task.title) and
-                AnytaskSynchronizer._selected(args.student,
-                   solution.student.name, solution.student.repo),
+                selected(args.course,
+                    solution.task.course_id) and
+                selected(args.task,
+                    solution.task.name, solution.task.title) and
+                selected(args.student,
+                    solution.student.name, solution.student.repo),
             self._anytask.solutions):
             self._sync_solution(solution, args)
 
@@ -560,29 +579,36 @@ def main():
         metavar='NAME',
         action='append', help='specify student to synchronize')
     parser.add_argument(
-        '-tl', '--tasks-list',
+        '-T', '--tasks-list',
         action='store_true', help='print list of tasks')
     parser.add_argument(
-        '-sl', '--students-list',
+        '-S', '--students-list',
         action='store_true', help='print list of students')
     parser.add_argument(
-        '-R', '--relocation', nargs=2,
+        '-r', '--add-relocation', nargs=2,
         metavar=('FROM', 'TO'),
         action='append', help='add repo relocation')
     parser.add_argument(
-        '-a', '--add-link', nargs=2,
+        '-R', '--remove-relocation', nargs=1,
+        metavar='FROM',
+        action='append', help='remove repo relocation')
+    parser.add_argument(
+        '-l', '--add-link', nargs=2,
         metavar=('RB_ID', 'SVN_PATH'),
         action='append', help='add link for force repo with empty `svn_path`')
     parser.add_argument(
-        '-r', '--remove-links',
+        '-X', '--remove-links',
         action='store_true', help='remove redundant links')
     parser.add_argument(
         '-f', '--force',
         action='store_true', help='force download repos with empty `svn_path`')
     parser.add_argument(
-        '-A', '--ask-link',
+        '-a', '--ask-link',
         action='store_true',
         help='ask link to add for force when `svn_path` is empty')
+    parser.add_argument(
+        '-Q', '--svn-quiet',
+        action='store_true', help='svn quiet mode')
     parser.add_argument(
         '-q', '--quiet',
         action='store_true', help='quiet mode')
@@ -633,9 +659,14 @@ def main():
             anytask.add_link(link)
         sys.exit()
 
-    if args.relocation:
-        for reloc in args.relocation:
+    if args.add_relocation:
+        for reloc in args.add_relocation:
             anytask.add_reloc(reloc)
+        sys.exit()
+
+    if args.remove_relocation:
+        for reloc in args.remove_relocation:
+            anytask.remove_reloc(reloc)
         sys.exit()
 
     sync = AnytaskSynchronizer(anytask)
