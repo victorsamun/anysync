@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 
-__version__ = '0.9'
+__version__ = '0.95'
 
 
 class AnytaskTask:
@@ -105,6 +105,7 @@ class Anytask:
     def _load_config(self, filename):
         logging.info("Loading configuration from '%s'", filename)
         self._config = configparser.ConfigParser()
+        self._config.optionxform = str
 
         parsed = self._config.read(filename)
         if parsed == []:
@@ -140,6 +141,15 @@ class Anytask:
             logging.critical("Can't read courses information.\n%s", e)
             raise AnytaskParseError()
 
+    def _load_relocations(self):
+        self._relocations = {}
+
+        if not self._config.has_section('RELOCS'):
+            return
+
+        for opt in self._config['RELOCS']:
+            self._relocations[opt] = self._config['RELOCS'][opt]
+
     def _load_courses(self, ids):
         self._courses = []
 
@@ -164,6 +174,9 @@ class Anytask:
 
         return os.path.join(
             Anytask._normalize(tasks[task[0]], tasks), task[1].strip())
+
+    def _relocate(self, repo):
+        return self._relocations.get(repo, repo)
 
     def _load_tasks(self):
         info = {}
@@ -239,7 +252,7 @@ class Anytask:
                             full_name, course, task_name)
                         continue
 
-                    username = student['username']
+                    username = self._relocate(student['username'])
 
                     logging.info("Processing student '%s'", full_name)
 
@@ -280,6 +293,7 @@ class Anytask:
         self._load_config(configfile)
         self._setup_auth()
         self._load_courses(self._parse_courses_id())
+        self._load_relocations()
         self._parse()
 
     @property
@@ -294,6 +308,19 @@ class Anytask:
             return self.get_config(section, key)
         except KeyError:
             return default
+
+    def add_reloc(self, link):
+        try:
+            if not self._config.has_section('RELOCS'):
+                self._config.add_section('RELOCS')
+
+            self._config.set('RELOCS', *link)
+            self._save_config()
+        except Exception as e:
+            logging.error("Failed to add relocation.\n%s", e)
+            return
+
+        logging.info("Relocation '%s' -> '%s' added", *link)
 
     def add_link(self, link):
         try:
@@ -539,6 +566,10 @@ def main():
         '-sl', '--students-list',
         action='store_true', help='print list of students')
     parser.add_argument(
+        '-R', '--relocation', nargs=2,
+        metavar=('FROM', 'TO'),
+        action='append', help='add repo relocation')
+    parser.add_argument(
         '-a', '--add-link', nargs=2,
         metavar=('RB_ID', 'SVN_PATH'),
         action='append', help='add link for force repo with empty `svn_path`')
@@ -600,6 +631,11 @@ def main():
     if args.add_link:
         for link in args.add_link:
             anytask.add_link(link)
+        sys.exit()
+
+    if args.relocation:
+        for reloc in args.relocation:
+            anytask.add_reloc(reloc)
         sys.exit()
 
     sync = AnytaskSynchronizer(anytask)
