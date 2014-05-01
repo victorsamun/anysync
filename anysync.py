@@ -12,6 +12,83 @@ import urllib.parse
 import urllib.request
 
 
+__version__ = '0.9'
+
+
+class AnytaskTask:
+    def __init__(self, course, title, name):
+        self._course = course
+        self._title = title
+        self._name = name
+
+    @property
+    def course_id(self):
+        return self._course
+
+    @property
+    def title(self):
+        return self._title
+
+    @property
+    def name(self):
+        return self._name
+
+
+class AnytaskStudent:
+    def __init__(self, fullname, username):
+        self._fullname = fullname
+        self._username = username
+
+    @property
+    def name(self):
+        return self._fullname
+
+    @property
+    def repo(self):
+        return self._username
+
+
+class AnytaskSVN:
+    def __init__(self, path, review_id, revision):
+        self._path = path
+        self._reviewid = review_id
+        self._revision = revision
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def review_id(self):
+        return self._reviewid
+
+    @property
+    def revision(self):
+        return self._revision
+
+
+class AnytaskSolution:
+    def __init__(self, task, student):
+        self._task = task
+        self._student = student
+        self._svn = None
+
+    def add_svn_info(self, svn_info):
+        self._svn = svn_info
+
+    @property
+    def task(self):
+        return self._task
+
+    @property
+    def student(self):
+        return self._student
+
+    @property
+    def svn(self):
+        return self._svn
+
+
 class ConfigParseError(Exception):
     pass
 
@@ -57,17 +134,16 @@ class Anytask:
     def _parse_courses_id(self):
         logging.info("Parsing course identificators")
         try:
-            self._courses_id = map(
-                lambda s: s.strip(),
+            return map(lambda s: s.strip(),
                 self._config['COURSE']['ids'].split(','))
         except KeyError as e:
             logging.critical("Can't read courses information.\n%s", e)
             raise AnytaskParseError()
 
-    def _load_courses(self):
+    def _load_courses(self, ids):
         self._courses = []
 
-        for course in self._courses_id:
+        for course in ids:
             logging.info("Loading course #%s", course)
             try:
                 url = urllib.parse.urljoin(
@@ -93,7 +169,7 @@ class Anytask:
         info = {}
 
         logging.info("Building tasks list")
-        for (course, item) in self.courses:
+        for (course, item) in self._courses:
             if 'tasks' not in item:
                 logging.error("Invalid course #%s information", course)
                 continue
@@ -106,20 +182,109 @@ class Anytask:
                     logging.error(
                         "Invalid course #%s information.\n%s", course, e)
 
-        self._tasks = {item[0]: Anytask._normalize(item[1], info)
+        self._task_names = {item[0]: Anytask._normalize(item[1], info)
             for item in info.items()}
+
+    def _parse(self):
+        self._load_tasks()
+
+        logging.info("Building solutions list")
+        self._tasks = {}
+        self._students = {}
+        self._solutions = []
+
+        for (course, item) in self._courses:
+            logging.info("Processing course #%s", course)
+
+            if 'tasks' not in item:
+                logging.error("No tasks in course #%s", course)
+                continue
+
+            for task in item['tasks']:
+                if 'task_id' not in task:
+                    logging.error("Invalid task in course #%s", course)
+                    continue
+
+                if 'title' not in task:
+                    logging.error("Task #%s has no title", task['task_id'])
+                    continue
+
+                task_name = self._task_names[task['task_id']]
+                task_title = task['title'].strip()
+
+                logging.info("Processing task '%s'", task_name)
+
+                if task_name not in self._tasks:
+                    self._tasks[(course, task_name)] = AnytaskTask(
+                        course, task_title, task_name)
+
+                task_obj = self._tasks[(course, task_name)]
+
+                if 'students' not in task:
+                    logging.error("No students in task #%s/'%s'",
+                        course, task_name)
+                    continue
+
+                for student in task['students']:
+                    if 'user_name' not in student:
+                        logging.error("Invalid student in task #%s/'%s'",
+                            course, task_name)
+                        continue
+
+                    full_name = student['user_name']
+
+                    if 'username' not in student:
+                        logging.error(
+                            "Invalid login of student '%s' in task #%s/'%s'",
+                            full_name, course, task_name)
+                        continue
+
+                    username = student['username']
+
+                    logging.info("Processing student '%s'", full_name)
+
+                    if username not in self._students:
+                        self._students[username] = AnytaskStudent(
+                            full_name, username)
+
+                    student_obj = self._students[username]
+                    solution_obj = AnytaskSolution(task_obj, student_obj)
+
+                    if ('svn' in student) and (student['svn'] is not None):
+                        if (('svn_path' not in student['svn']) or
+                            ('rb_review_id' not in student['svn']) or
+                            ('svn_rev' not in student['svn'])):
+                            logging.error("Invalid svn info of student '%s' in"
+                                " task #%s/'%s'", full_name, course, task_name)
+                        else:
+                            solution_obj.add_svn_info(
+                                AnytaskSVN(
+                                    student['svn']['svn_path'],
+                                    str(student['svn']['rb_review_id']),
+                                    str(student['svn']['svn_rev'])))
+
+                    self._solutions.append(solution_obj)
+
+                    logging.info("Processing student complete")
+
+                logging.info("Processing task '%s' complete", task_name)
+
+            logging.info("Processing course #%s complete", course)
+
+    def _save_config(self):
+        with open(self._configfile, mode='w') as f:
+            self._config.write(f, True)
 
     def __init__(self, configfile):
         self._configfile = configfile
         self._load_config(configfile)
         self._setup_auth()
-        self._parse_courses_id()
-        self._load_courses()
-        self._load_tasks()
+        self._load_courses(self._parse_courses_id())
+        self._parse()
 
     @property
-    def courses(self):
-        return self._courses
+    def solutions(self):
+        return self._solutions
 
     def get_config(self, section, key):
         return self._config[section][key]
@@ -135,46 +300,39 @@ class Anytask:
             if not self._config.has_section('RB_LINKS'):
                 self._config.add_section('RB_LINKS')
 
-            self._config.set('RB_LINKS', *link.split(':', 2))
-            with open(self._configfile, mode='w') as f:
-                self._config.write(f, True)
+            self._config.set('RB_LINKS', *link)
+            self._save_config()
         except Exception as e:
             logging.error("Failed to add link.\n%s", e)
-            return False
+            return
 
-        return True
+        logging.info("Link #%s to '%s' added", *link)
+
+    def get_link(self, link):
+        return self.get_config_safe('RB_LINKS', link)
+
+    def remove_link(self, link):
+        try:
+            self._config.remove_option('RB_LINKS', link)
+            self._save_config()
+        except Exception as e:
+            logging.error("Failed to remove link.\n%s", e)
+            return
+
+        logging.info("Link #%s removed", link)
 
     def get_students(self):
-        result = set()
-
-        try:
-            for (course, item) in self._courses:
-                for task in item['tasks']:
-                    for student in task['students']:
-                        result.add(student['user_name'])
-        except KeyError as e:
-            logging.error("Invalid courses information.\n%s", e)
-            return set()
-
-        return result
-
-    def get_task(self, taskid):
-        return self._tasks[taskid]
+        return self._students.values()
 
     def get_tasks(self):
         cached = set()
         result = []
 
-        try:
-            for (course, item) in self._courses:
-                for task in item['tasks']:
-                    fullname = self._tasks[task['task_id']]
-                    if fullname not in cached:
-                        cached.add(fullname)
-                        result.append((fullname, task['title'].strip()))
-        except KeyError as e:
-            logging.error("Invalid courses information.\n%s", e)
-            return []
+        for task_id in sorted(self._task_names.keys()):
+            name = self._task_names[task_id]
+            if name not in cached:
+                cached.add(name)
+                result.append(name)
 
         return result
 
@@ -184,81 +342,13 @@ class AnytaskSynchronizer:
     def _selected(selector, *values):
         return (selector is None) or (len(set(values) & set(selector)) != 0)
 
-    def _sync_course(self, course, args):
-        for task in course['tasks']:
-            try:
-                self._sync_task(task, args)
-            except KeyError as e:
-                logging.error("Invalid task '%s' information.\n%s", course, e)
-
-    def _sync_task(self, task, args):
-        name = self._anytask.get_task(task['task_id'])
-        if not AnytaskSynchronizer._selected(
-            args.task, task['title'].strip(), name):
-            return
-
-        logging.info("Synchronization task '%s'", name)
-
-        for student in task['students']:
-            try:
-                self._sync_solution(student, name, args)
-            except KeyError as e:
-                logging.error("Invalid solution information.\n%s", e)
-
-    def _sync_solution(self, student, task, args):
-        fullname = student['user_name']
-        username = student['username']
-        if not AnytaskSynchronizer._selected(args.student, fullname, username):
-            return
-
-        logging.info("Checking solution by '%s'", fullname)
-
-        svn = student['svn']
-        if svn is None:
-            logging.info("SVN not found. Skip")
-            return
-
-        svn_rev = str(svn['svn_rev'])
-        svn_path = svn['svn_path']
-        rb_id = str(svn['rb_review_id'])
-        dest = None
-        if svn_path is None or svn_path == "":
-            svn_path = self._anytask.get_config_safe('RB_LINKS', rb_id)
-            if svn_path is None:
-                if args.force:
-                    logging.warning("Task '%s' by '%s' has only rb_id=%s",
-                        task, fullname, rb_id)
-
-                    if username in self._forced:
-                        logging.info("Repository #%s already downloaded. Skip")
-                        return
-
-                    dest = self._make_destination(task, fullname, True)
-                    svn_path = ""
-                    self._forced.add(username)
-                else:
-                    logging.warning("SVN path is not specified. Skip")
-                    return
-            else:
-                logging.info("SVN path is not specified, `rb_id` will be used")
-                dest = self._make_destination(task, fullname)
-        else:
-            dest = self._make_destination(task, fullname)
-
-            if self._anytask.get_config_safe('RB_LINKS', rb_id) is not None:
-                logging.warning("Review board id '%s' is ambiguous", rb_id)
-
-        if dest is not None:
-            self._download(username, svn_rev, svn_path, dest, args)
-
-    def _make_destination(self, taskname, fullname, forced=False):
-        if forced:
-            return self._make_destination(
-                self._anytask.get_config('COURSE', 'unsorted'), fullname)
-
+    def _make_destination(self, solution, forced=False):
         try:
-            path = os.path.join(
-                self._anytask.get_config('COURSE', 'name'), taskname, fullname)
+            path = os.path.join(self._anytask.get_config('COURSE', 'name'),
+                self._anytask.get_config('COURSE', 'unsorted') if forced else
+                    solution.task.name,
+                solution.student.name)
+
             if not os.path.isdir(path):
                 os.makedirs(path)
         except (KeyError, OSError) as e:
@@ -267,31 +357,134 @@ class AnytaskSynchronizer:
 
         return path
 
-    def _download(self, username, revision, svnpath, path, args):
-        logging.info("SVN '%s' found, revision %s", svnpath, revision)
+    def _sync_solution(self, solution, args):
+        logging.info("Checking solution of #%s/'%s' by '%s'",
+            solution.task.course_id, solution.task.name, solution.student.name)
+
+        if solution.svn is None:
+            logging.info("SVN not found. Skip")
+            return
+
+        svn_path = solution.svn.path
+        dest = None
+
+        if svn_path in [None, '']:
+            svn_path = self._anytask.get_link(solution.svn.review_id)
+
+            if svn_path is None:
+                logging.warning("Solution have only review id #%s",
+                    solution.svn.review_id)
+
+                if args.force:
+                    repo = solution.student.repo
+
+                    if repo in self._forced:
+                        logging.info(
+                            "Repository '%s' already downloaded. Skip", repo)
+                        if args.ask_link:
+                            self._ask_add_link(solution)
+                        return
+
+                    dest = self._make_destination(solution, True)
+                    if dest is None:
+                        return
+
+                    svn_path = ""
+                    self._forced.add(repo)
+                else:
+                    logging.warning("SVN path is not specified. Skip")
+                    return
+            else:
+                logging.info("Review id #%s will be used",
+                    solution.svn.review_id)
+        else:
+            rev_id = solution.svn.review_id
+
+            if self._anytask.get_link(rev_id) is not None:
+                logging.warning("ReviewBoard link to #%s is redundant", rev_id)
+
+                if args.remove_links:
+                    self._anytask.remove_link(rev_id)
+
+        if dest is None:
+            dest = self._make_destination(solution)
+
+        if dest is not None:
+            if self._download(solution, svn_path, dest):
+                if (svn_path == "") and args.ask_link:
+                    self._ask_add_link(solution)
+
+    def _ask_add_link(self, solution):
+        def get_dirs(path, *exclude):
+            return filter(lambda d: (os.path.isdir(os.path.join(path, d)) and
+                (d not in exclude)), os.listdir(path))
+
+        choices = []
+        try:
+            rootdir = os.path.join(
+                self._anytask.get_config('COURSE', 'name'),
+                self._anytask.get_config('COURSE', 'unsorted'),
+                solution.student.name)
+
+            for _dir in get_dirs(rootdir, '.svn'):
+                if _dir not in ['branches', 'tags', 'trunk']:
+                    choices.append(_dir)
+
+                choices += map(
+                    lambda d: os.path.join(_dir, d),
+                    get_dirs(os.path.join(rootdir, _dir), '.svn'))
+        except (KeyError, OSError):
+            return
+
+        print("Select path to task '{}' or enter path manually:".format(
+            solution.task.name))
+
+        for item in enumerate(choices):
+            print("{:2d} {}".format(item[0] + 1, item[1]))
+
+        answer = input()
+        if (len(choices) == 1) and (answer == ''):
+            answer = '1'
+
+        try:
+            answer = int(answer)
+            if not (0 < answer <= len(choices)):
+                return None
+            answer = choices[answer - 1]
+        except ValueError:
+            pass
+
+        self._anytask.add_link([solution.svn.review_id, answer])
+
+    def _download(self, solution, svnpath, destination):
+        logging.info("SVN '%s' found, revision %s",
+            svnpath, solution.svn.revision)
 
         try:
             url = urllib.parse.urljoin(
                 self._anytask.get_config('COURSE', 'svn'),
-                '/'.join([username, svnpath]))
+                '/'.join([solution.student.repo, svnpath]))
 
             code = subprocess.call([
                 "svn", "checkout",
+                "--revision", solution.svn.revision,
                 "--force",
+                "--no-auth-cache",
                 "--username", self._anytask.get_config('AUTH', 'username'),
                 "--password", self._anytask.get_config('AUTH', 'password'),
                 url,
-                path,
+                destination,
             ])
 
             if code != 0:
                 logging.error("Download error: svn returns %s", code)
-                return
+                return False
         except Exception as e:
             logging.error("Download error.\n{}", e)
-            return
+            return False
 
-        logging.info("Downloaded to '%s'", path)
+        logging.info("Downloaded to '%s'", destination)
+        return True
 
     def __init__(self, anytask):
         self._anytask = anytask
@@ -300,50 +493,82 @@ class AnytaskSynchronizer:
     def synchronize(self, args):
         logging.info("Start synchronization")
 
-        for (course, item) in self._anytask.courses:
-            if not AnytaskSynchronizer._selected(args.course, course):
-                continue
+        for solution in filter(
+            lambda solution:
+                AnytaskSynchronizer._selected(args.course,
+                   solution.task.course_id) and
+                AnytaskSynchronizer._selected(args.task,
+                   solution.task.name, solution.task.title) and
+                AnytaskSynchronizer._selected(args.student,
+                   solution.student.name, solution.student.repo),
+            self._anytask.solutions):
+            self._sync_solution(solution, args)
 
-            logging.info("Synchronization course #%s", course)
-            try:
-                self._sync_course(item, args)
-            except KeyError as e:
-                logging.error("Invalid course #%s information.\n%s", course, e)
+        logging.info("Synchronization completed")
 
 
 def main():
-    parser = argparse.ArgumentParser(description='AnyTask Synchronizer')
+    parser = argparse.ArgumentParser(
+        usage='%(prog)s [OPTIONS]',
+        description='AnyTask SVN Synchronizer',
+        epilog="""
+            Report bugs to Victor Samun <victor.samun@gmail.com> and
+            Nickolai Zhuravlev <znick@znick.ru>
+        """,
+        prefix_chars='-/')
     parser.add_argument(
-        '--config',
+        '-C', '--config',
+        metavar='FILENAME',
         default='anysync.conf', help='configuration file')
     parser.add_argument(
-        '--course',
+        '-c', '--course',
+        metavar='ID',
         action='append', help='specify course to synchronize')
     parser.add_argument(
-        '--task',
+        '-t', '--task',
+        metavar='NAME',
         action='append', help='specify tasks to synchronize')
     parser.add_argument(
-        '--student',
+        '-s', '--student',
+        metavar='NAME',
         action='append', help='specify student to synchronize')
     parser.add_argument(
-        '--tasks-list',
+        '-tl', '--tasks-list',
         action='store_true', help='print list of tasks')
     parser.add_argument(
-        '--students-list',
+        '-sl', '--students-list',
         action='store_true', help='print list of students')
     parser.add_argument(
-        '--add-link',
+        '-a', '--add-link', nargs=2,
+        metavar=('RB_ID', 'SVN_PATH'),
         action='append', help='add link for force repo with empty `svn_path`')
     parser.add_argument(
-        '--force',
+        '-r', '--remove-links',
+        action='store_true', help='remove redundant links')
+    parser.add_argument(
+        '-f', '--force',
         action='store_true', help='force download repos with empty `svn_path`')
     parser.add_argument(
-        '--quiet',
+        '-A', '--ask-link',
+        action='store_true',
+        help='ask link to add for force when `svn_path` is empty')
+    parser.add_argument(
+        '-q', '--quiet',
         action='store_true', help='quiet mode')
     parser.add_argument(
-        '--verbose',
+        '-v', '--verbose',
         action='store_true', help='print verbose information')
+    parser.add_argument(
+        '-V', '--version',
+        action='store_true', help='print version and exit')
     args = parser.parse_args()
+
+    if args.version:
+        print("Anytask Synchronizer (AnySync) version {}".format(__version__))
+        sys.exit()
+
+    if args.ask_link and not args.force:
+        parser.error("--ask-link requires --force")
 
     logging.basicConfig(format='[%(levelname)s] %(message)s')
     if args.verbose:
@@ -363,19 +588,18 @@ def main():
         sys.exit(3)
 
     if args.students_list:
-        for student in sorted(anytask.get_students()):
-            print(student)
+        for student in sorted(anytask.get_students(), key=lambda x: x.name):
+            print("{} ({})".format(student.name, student.repo))
         sys.exit()
 
     if args.tasks_list:
-        for (fullname, shortname) in anytask.get_tasks():
-            print("'{}' ({})".format(shortname, fullname))
+        for taskname in anytask.get_tasks():
+            print(taskname)
         sys.exit()
 
     if args.add_link:
         for link in args.add_link:
-            if anytask.add_link(link):
-                logging.info("Link '%s' added", link)
+            anytask.add_link(link)
         sys.exit()
 
     sync = AnytaskSynchronizer(anytask)
