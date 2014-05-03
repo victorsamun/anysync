@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 
 
-__version__ = '0.96'
+__version__ = '0.97'
 
 
 class AnytaskTask:
