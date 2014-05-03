@@ -507,14 +507,13 @@ class AnytaskSynchronizer:
 
             callargs = [
                 "svn", "checkout",
-                "--revision", solution.svn.revision,
                 "--force",
                 "--no-auth-cache",
                 "--username", self._anytask.get_config('AUTH', 'username'),
                 "--password", self._anytask.get_config('AUTH', 'password')]
             if quiet:
                 callargs.append("--quiet")
-            callargs += [url, destination]
+            callargs += ['@'.join([url, solution.svn.revision]), destination]
 
             code = subprocess.call(callargs)
 
@@ -589,7 +588,7 @@ def main():
         metavar=('FROM', 'TO'),
         action='append', help='add repo relocation')
     parser.add_argument(
-        '-R', '--remove-relocation', nargs=1,
+        '-R', '--remove-relocation',
         metavar='FROM',
         action='append', help='remove repo relocation')
     parser.add_argument(
