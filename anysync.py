@@ -10,6 +10,7 @@ import subprocess
 import sys
 import urllib.parse
 import urllib.request
+import xml.dom.minidom
 
 
 __version__ = '0.97'
@@ -51,8 +52,11 @@ class AnytaskStudent:
 class AnytaskSVN:
     def __init__(self, path, review_id, revision):
         self._path = path
-        self._reviewid = review_id
-        self._revision = revision
+        self._reviewid = str(review_id)
+        self._revision = str(revision)
+
+        if self._path is not None:
+            self._path = self._path.strip()
 
     @property
     def path(self):
@@ -273,8 +277,8 @@ class Anytask:
                             solution_obj.add_svn_info(
                                 AnytaskSVN(
                                     student['svn']['svn_path'],
-                                    str(student['svn']['rb_review_id']),
-                                    str(student['svn']['svn_rev'])))
+                                    student['svn']['rb_review_id'],
+                                    student['svn']['svn_rev']))
 
                     self._solutions.append(solution_obj)
 
@@ -527,18 +531,45 @@ class AnytaskSynchronizer:
         logging.info("Downloaded to '%s'", destination)
         return True
 
-    def __init__(self, anytask):
-        self._anytask = anytask
-        self._forced = set()
+    def _is_updated(self, solution):
+        logging.info("Checking update %s:'%s' by '%s'",
+            solution.task.course_id, solution.task.name, solution.student.name)
 
-    def synchronize(self, args):
+        path = os.path.join(self._anytask.get_config('COURSE', 'name'),
+            solution.task.name, solution.student.name)
+
+        if not os.path.isdir(path):
+            return solution.svn is None
+
+        try:
+            result = subprocess.check_output(["svn", "info", "--xml", path])
+        except subprocess.CalledProcessError as e:
+            logging.error("Checking error: svn returns %s", e.returncode)
+            return False
+
+        try:
+            xml_result = xml.dom.minidom.parseString(result)
+        except Exception as e:
+            logging.error("Invalid output\n%s", e)
+            return False
+
+        entries = xml_result.getElementsByTagName('entry')
+        if len(entries) == 0:
+            logging.error("No 'entry' item in result")
+            return False
+
+        if 'revision' not in entries[0].attributes:
+            logging.error("No 'revision' attribute in result")
+            return False
+
+        return entries[0].attributes['revision'].value == solution.svn.revision
+
+    def _filter_solutions(self, args):
         def selected(selector, *values):
             return ((selector is None) or
                 (len(set(values) & set(selector)) != 0))
 
-        logging.info("Start synchronization")
-
-        for solution in filter(
+        return filter(
             lambda solution:
                 selected(args.course,
                     solution.task.course_id) and
@@ -546,10 +577,27 @@ class AnytaskSynchronizer:
                     solution.task.name, solution.task.title) and
                 selected(args.student,
                     solution.student.name, solution.student.repo),
-            self._anytask.solutions):
+            self._anytask.solutions)
+
+    def __init__(self, anytask):
+        self._anytask = anytask
+        self._forced = set()
+
+    def synchronize(self, args):
+        logging.info("Start synchronization")
+
+        solutions = (self.get_updated(args) if args.update else
+            self._filter_solutions(args))
+
+        for solution in solutions:
             self._sync_solution(solution, args)
 
         logging.info("Synchronization completed")
+
+    def get_updated(self, args):
+        return filter(
+            lambda solution: not self._is_updated(solution),
+            self._filter_solutions(args))
 
 
 def main():
@@ -606,6 +654,12 @@ def main():
         action='store_true',
         help='ask link to add for force when `svn_path` is empty')
     parser.add_argument(
+        '-u', '--update',
+        action='store_true', help='download only new or modified repos')
+    parser.add_argument(
+        '-U', '--update-info',
+        action='store_true', help='show new or modified repos')
+    parser.add_argument(
         '-Q', '--svn-quiet',
         action='store_true', help='svn quiet mode')
     parser.add_argument(
@@ -637,11 +691,11 @@ def main():
     try:
         anytask = Anytask(args.config)
     except ConfigParseError:
-        sys.exit(1)
-    except AuthenticationError:
-        sys.exit(2)
-    except AnytaskParseError:
         sys.exit(3)
+    except AuthenticationError:
+        sys.exit(4)
+    except AnytaskParseError:
+        sys.exit(5)
 
     if args.students_list:
         for student in sorted(anytask.get_students(), key=lambda x: x.name):
@@ -669,6 +723,14 @@ def main():
         sys.exit()
 
     sync = AnytaskSynchronizer(anytask)
+
+    if args.update_info:
+        for solution in sync.get_updated(args):
+            print("{}:'{}' ({})".format(
+                solution.task.course_id, solution.task.name,
+                solution.student.name))
+        sys.exit()
+
     sync.synchronize(args)
 
 
