@@ -13,7 +13,7 @@ import urllib.request
 import xml.dom.minidom
 
 
-__version__ = '0.97'
+__version__ = '1.00'
 
 
 class AnytaskTask:
