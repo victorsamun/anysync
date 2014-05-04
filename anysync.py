@@ -13,7 +13,7 @@ import urllib.request
 import xml.dom.minidom
 
 
-__version__ = '1.00'
+__version__ = '1.01'
 
 
 class AnytaskTask:
@@ -93,11 +93,130 @@ class AnytaskSolution:
         return self._svn
 
 
+class AnytaskConfig:
+    def __init__(self, filename):
+        self._filename = filename
+        self._config = configparser.ConfigParser()
+        self._config.optionxform = str
+
+        logging.info("Loading configuration from '%s'", filename)
+
+        if self._config.read(filename) == []:
+            logging.critical("Can't load config file '%s'", filename)
+            raise ConfigParseError()
+
+        if not self._config.has_section('AUTH'):
+            logging.critical("Invalid config file: no 'AUTH' section")
+            raise ConfigParseError()
+
+        for option in ['anytaskurl', 'username', 'password']:
+            if not self._config.has_option('AUTH', option):
+                logging.critical("Invalid config file: no '%s' option", option)
+                raise ConfigParseError()
+
+        if not self._config.has_section('COURSE'):
+            logging.critical("Invalid config file: no 'COURSE' section")
+            raise ConfigParseError()
+
+        for option in ['name', 'unsorted', 'svn', 'ids']:
+            if not self._config.has_option('COURSE', option):
+                logging.critical("Invalid config file: no '%s' option", option)
+                raise ConfigParseError()
+
+        for section in ['RB_LINKS', 'RELOCS']:
+            try:
+                if not self._config.has_section(section):
+                    self._config.add_section(section)
+            except Exception as e:
+                logging.critical("Failed to add section '%s'", section)
+                raise ConfigParseError()
+
+        logging.info("Configuration loaded")
+
+    def _save(self):
+        with open(self._filename, mode='w') as f:
+            self._config.write(f, True)
+
+    @property
+    def _sect_auth(self):
+        return self._config['AUTH']
+
+    @property
+    def mainurl(self):
+        return self._sect_auth['anytaskurl']
+
+    @property
+    def username(self):
+        return self._sect_auth['username']
+
+    @property
+    def password(self):
+        return self._sect_auth['password']
+
+    @property
+    def _sect_course(self):
+        return self._config['COURSE']
+
+    @property
+    def course_name(self):
+        return self._sect_course['name']
+
+    @property
+    def unsorted_name(self):
+        return self._sect_course['unsorted']
+
+    @property
+    def svn_link(self):
+        return self._sect_course['svn']
+
+    @property
+    def courses_id(self):
+        return map(lambda s: s.strip(), self._sect_course['ids'].split(','))
+
+    def _add_optval(self, optname, hname, keyval):
+        try:
+            self._config.set(optname, *keyval)
+            self._save()
+            return True
+        except Exception as e:
+            logging.error("Failed to add %s.\n%s", hname, e)
+            return False
+
+    def _get_optval(self, optname, key):
+        if self._config.has_option(optname, key):
+            return self._config[optname][key]
+
+        return None
+
+    def _remove_optval(self, optname, hname, key):
+        try:
+            self._config.remove_option(optname, key)
+            self._save()
+            return True
+        except Exception as e:
+            logging.error("Failed to remove %s.\n%s", hname, e)
+            return False
+
+    def add_reloc(self, link):
+        return self._add_optval('RELOCS', 'relocation', link)
+
+    def get_reloc(self, link):
+        return self._get_optval('RELOCS', link)
+
+    def remove_reloc(self, link):
+        return self._remove_optval('RELOCS', 'relocation', link)
+
+    def add_link(self, link):
+        return self._add_optval('RB_LINKS', 'link', link)
+
+    def get_link(self, link):
+        return self._get_optval('RB_LINKS', link)
+
+    def remove_link(self, link):
+        return self._remove_optval('RB_LINKS', 'link', link)
+
+
 class ConfigParseError(Exception):
-    pass
-
-
-class AuthenticationError(Exception):
     pass
 
 
@@ -106,68 +225,33 @@ class AnytaskParseError(Exception):
 
 
 class Anytask:
-    def _load_config(self, filename):
-        logging.info("Loading configuration from '%s'", filename)
-        self._config = configparser.ConfigParser()
-        self._config.optionxform = str
-
-        parsed = self._config.read(filename)
-        if parsed == []:
-            logging.critical("Can't load config file '%s'", filename)
-            raise ConfigParseError()
-
-        logging.info("Configuration loaded")
-
     def _setup_auth(self):
         logging.info("Prepare BasicHTTP authorization")
-        try:
-            pass_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-            pass_mgr.add_password(
-                None,
-                self._config['AUTH']['anytaskurl'],
-                self._config['AUTH']['username'],
-                self._config['AUTH']['password'])
-        except KeyError as e:
-            logging.critical("Can't read data for authentication.\n%s", e)
-            raise AuthenticationError()
+
+        pass_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        pass_mgr.add_password(None,
+            self._config.mainurl, self._config.username, self._config.password)
 
         urllib.request.install_opener(
             urllib.request.build_opener(
                 urllib.request.HTTPBasicAuthHandler(pass_mgr)))
+
         logging.info("BasicHTTP authorization ready")
 
-    def _parse_courses_id(self):
-        logging.info("Parsing course identificators")
-        try:
-            return map(lambda s: s.strip(),
-                self._config['COURSE']['ids'].split(','))
-        except KeyError as e:
-            logging.critical("Can't read courses information.\n%s", e)
-            raise AnytaskParseError()
-
-    def _load_relocations(self):
-        self._relocations = {}
-
-        if not self._config.has_section('RELOCS'):
-            return
-
-        for opt in self._config['RELOCS']:
-            self._relocations[opt] = self._config['RELOCS'][opt]
-
-    def _load_courses(self, ids):
+    def _load_courses(self):
         self._courses = []
 
-        for course in ids:
+        for course in self._config.courses_id:
             logging.info("Loading course #%s", course)
             try:
                 url = urllib.parse.urljoin(
-                    self._config['AUTH']['anytaskurl'],
+                    self._config.mainurl,
                     '/'.join(['course', '{}?format=json'.format(course)]))
 
                 with urllib.request.urlopen(url) as f:
                     self._courses.append(
                         (course, json.loads(f.read().decode('utf8'))))
-            except (KeyError, ValueError,
+            except (ValueError,
                 urllib.error.HTTPError, urllib.error.URLError) as e:
                 logging.error("Can't load course #%s.\n%s", course, e)
 
@@ -180,7 +264,8 @@ class Anytask:
             Anytask._normalize(tasks[task[0]], tasks), task[1].strip())
 
     def _relocate(self, repo):
-        return self._relocations.get(repo, repo)
+        result = self._config.get_reloc(repo)
+        return (repo if result is None else result)
 
     def _load_tasks(self):
         info = {}
@@ -286,80 +371,20 @@ class Anytask:
 
             logging.info("Processing course #%s complete", course)
 
-    def _save_config(self):
-        with open(self._configfile, mode='w') as f:
-            self._config.write(f, True)
-
     def __init__(self, configfile):
-        self._configfile = configfile
-        self._load_config(configfile)
+        self._config = AnytaskConfig(configfile)
+
         self._setup_auth()
-        self._load_courses(self._parse_courses_id())
-        self._load_relocations()
+        self._load_courses()
         self._parse()
 
     @property
     def solutions(self):
         return self._solutions
 
-    def get_config(self, section, key):
-        return self._config[section][key]
-
-    def get_config_safe(self, section, key, default=None):
-        try:
-            return self.get_config(section, key)
-        except KeyError:
-            return default
-
-    def add_reloc(self, link):
-        try:
-            if not self._config.has_section('RELOCS'):
-                self._config.add_section('RELOCS')
-
-            self._config.set('RELOCS', *link)
-            self._save_config()
-        except Exception as e:
-            logging.error("Failed to add relocation.\n%s", e)
-            return
-
-        logging.info("Relocation '%s' -> '%s' added", *link)
-
-    def remove_reloc(self, link):
-        try:
-            self._config.remove_option('RELOCS', link)
-            self._save_config()
-        except Exception as e:
-            logging.error("Failed to remove relocation.\n%s", e)
-            return
-
-        logging.info("Relocation '%s' removed", link)
-
-    def add_link(self, link):
-        try:
-            if not self._config.has_section('RB_LINKS'):
-                self._config.add_section('RB_LINKS')
-
-            self._config.set('RB_LINKS', *link)
-            self._save_config()
-        except Exception as e:
-            logging.error("Failed to add link.\n%s", e)
-            return False
-
-        logging.info("Link #%s to '%s' added", *link)
-        return True
-
-    def get_link(self, link):
-        return self.get_config_safe('RB_LINKS', link)
-
-    def remove_link(self, link):
-        try:
-            self._config.remove_option('RB_LINKS', link)
-            self._save_config()
-        except Exception as e:
-            logging.error("Failed to remove link.\n%s", e)
-            return
-
-        logging.info("Link #%s removed", link)
+    @property
+    def config(self):
+        return self._config
 
     def get_students(self):
         return self._students.values()
@@ -380,14 +405,14 @@ class Anytask:
 class AnytaskSynchronizer:
     def _make_destination(self, solution, forced=False):
         try:
-            path = os.path.join(self._anytask.get_config('COURSE', 'name'),
-                self._anytask.get_config('COURSE', 'unsorted') if forced else
+            path = os.path.join(self._anytask.config.course_name,
+                self._anytask.config.unsorted_name if forced else
                     solution.task.name,
                 solution.student.name)
 
             if not os.path.isdir(path):
                 os.makedirs(path)
-        except (KeyError, OSError) as e:
+        except OSError as e:
             logging.error("Make directory error.\n%s", e)
             return None
 
@@ -405,7 +430,7 @@ class AnytaskSynchronizer:
         dest = None
 
         if svn_path in [None, '']:
-            svn_path = self._anytask.get_link(solution.svn.review_id)
+            svn_path = self._anytask.config.get_link(solution.svn.review_id)
 
             if svn_path is None:
                 logging.warning("Solution have only review id #%s",
@@ -438,11 +463,11 @@ class AnytaskSynchronizer:
         else:
             rev_id = solution.svn.review_id
 
-            if self._anytask.get_link(rev_id) is not None:
+            if self._anytask.config.get_link(rev_id) is not None:
                 logging.warning("ReviewBoard link to #%s is redundant", rev_id)
 
                 if args.remove_links:
-                    self._anytask.remove_link(rev_id)
+                    self._anytask.config.remove_link(rev_id)
 
         if dest is None:
             dest = self._make_destination(solution)
@@ -462,8 +487,8 @@ class AnytaskSynchronizer:
         choices = []
         try:
             rootdir = os.path.join(
-                self._anytask.get_config('COURSE', 'name'),
-                self._anytask.get_config('COURSE', 'unsorted'),
+                self._anytask.config.course_name,
+                self._anytask.config.unsorted_name,
                 solution.student.name)
 
             for _dir in get_dirs(rootdir, '.svn'):
@@ -473,11 +498,11 @@ class AnytaskSynchronizer:
                 choices += map(
                     lambda d: os.path.join(_dir, d),
                     get_dirs(os.path.join(rootdir, _dir), '.svn'))
-        except (KeyError, OSError):
+        except OSError:
             return False
 
-        print("Select path to task '{}' or enter path manually:".format(
-            solution.task.name))
+        print("Select path to task '{}' or enter path "
+            "manually (empty to skip):".format(solution.task.name))
 
         for item in enumerate(choices):
             print("{:2d} {}".format(item[0] + 1, item[1]))
@@ -498,7 +523,7 @@ class AnytaskSynchronizer:
                 sys.stderr.write("Incorrect path\n")
                 return False
 
-        return self._anytask.add_link([solution.svn.review_id, answer])
+        return self._anytask.config.add_link([solution.svn.review_id, answer])
 
     def _download(self, solution, svnpath, destination, quiet=False):
         logging.info("SVN '%s' found, revision %s",
@@ -506,15 +531,15 @@ class AnytaskSynchronizer:
 
         try:
             url = urllib.parse.urljoin(
-                self._anytask.get_config('COURSE', 'svn'),
+                self._anytask.config.svn_link,
                 '/'.join([solution.student.repo, svnpath]))
 
             callargs = [
                 "svn", "checkout",
                 "--force",
                 "--no-auth-cache",
-                "--username", self._anytask.get_config('AUTH', 'username'),
-                "--password", self._anytask.get_config('AUTH', 'password')]
+                "--username", self._anytask.config.username,
+                "--password", self._anytask.config.password]
             if quiet:
                 callargs.append("--quiet")
             callargs += ['@'.join([url, solution.svn.revision]), destination]
@@ -525,7 +550,7 @@ class AnytaskSynchronizer:
                 logging.error("Download error: svn returns %s", code)
                 return False
         except Exception as e:
-            logging.error("Download error.\n{}", e)
+            logging.error("Download error.\n%s", e)
             return False
 
         logging.info("Downloaded to '%s'", destination)
@@ -535,7 +560,7 @@ class AnytaskSynchronizer:
         logging.info("Checking update %s:'%s' by '%s'",
             solution.task.course_id, solution.task.name, solution.student.name)
 
-        path = os.path.join(self._anytask.get_config('COURSE', 'name'),
+        path = os.path.join(self._anytask.config.course_name,
             solution.task.name, solution.student.name)
 
         if not os.path.isdir(path):
@@ -692,10 +717,8 @@ def main():
         anytask = Anytask(args.config)
     except ConfigParseError:
         sys.exit(3)
-    except AuthenticationError:
-        sys.exit(4)
     except AnytaskParseError:
-        sys.exit(5)
+        sys.exit(4)
 
     if args.students_list:
         for student in sorted(anytask.get_students(), key=lambda x: x.name):
@@ -709,17 +732,17 @@ def main():
 
     if args.add_link:
         for link in args.add_link:
-            anytask.add_link(link)
+            anytask.config.add_link(link)
         sys.exit()
 
     if args.add_relocation:
         for reloc in args.add_relocation:
-            anytask.add_reloc(reloc)
+            anytask.config.add_reloc(reloc)
         sys.exit()
 
     if args.remove_relocation:
         for reloc in args.remove_relocation:
-            anytask.remove_reloc(reloc)
+            anytask.config.remove_reloc(reloc)
         sys.exit()
 
     sync = AnytaskSynchronizer(anytask)
