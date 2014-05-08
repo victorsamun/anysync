@@ -534,7 +534,10 @@ class AnytaskSynchronizer:
         if answer == '':
             logging.info("Selection canceled")
             if (args.ignore is not None) and (None in args.ignore):
-                self._anytask.config.add_ignore(solution.svn.review_id)
+                rid = solution.svn.review_id
+
+                if self._anytask.config.add_ignore(rid):
+                    logging.info("Review '%s' will be ignored", rid)
             return False
 
         try:
