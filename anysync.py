@@ -118,7 +118,7 @@ class AnytaskConfig:
             logging.critical("Invalid config file: no 'COURSE' section")
             raise ConfigParseError()
 
-        for option in ['name', 'unsorted', 'svn', 'ids']:
+        for option in ['name', 'unsorted', 'svn', 'ids', 'ignore']:
             if not self._config.has_option('COURSE', option):
                 logging.critical("Invalid config file: no '%s' option", option)
                 raise ConfigParseError()
@@ -173,6 +173,10 @@ class AnytaskConfig:
     def courses_id(self):
         return map(lambda s: s.strip(), self._sect_course['ids'].split(','))
 
+    @property
+    def ignore(self):
+        return map(lambda s: s.strip(), self._sect_course['ignore'].split(','))
+
     def _add_optval(self, optname, hname, keyval):
         try:
             self._config.set(optname, *keyval)
@@ -214,6 +218,22 @@ class AnytaskConfig:
 
     def remove_link(self, link):
         return self._remove_optval('RB_LINKS', 'link', link)
+
+    def add_ignore(self, rb_id):
+        igns = set(self.ignore)
+        if rb_id in igns:
+            return True
+
+        igns.add(rb_id)
+        return self._add_optval('COURSE', 'ignore', 'ignore', ','.join(igns))
+
+    def remove_ignore(self, rb_id):
+        igns = set(self.ignore)
+        if rb_id not in igns:
+            return True
+
+        igns.remove(rb_id)
+        return self._add_optval('COURSE', 'ignore', 'ignore', ','.join(igns))
 
 
 class ConfigParseError(Exception):
