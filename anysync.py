@@ -176,7 +176,9 @@ class AnytaskConfig:
     @property
     def ignore(self):
         return set(
-            map(lambda s: s.strip(), self._sect_course['ignore'].split(',')))
+            filter(lambda s: s,
+                map(lambda s: s.strip(),
+                    self._sect_course['ignore'].split(','))))
 
     def _add_optval(self, optname, hname, keyval):
         try:
@@ -226,7 +228,7 @@ class AnytaskConfig:
             return True
 
         igns.add(rb_id)
-        return self._add_optval('COURSE', 'ignore', 'ignore', ','.join(igns))
+        return self._add_optval('COURSE', 'ignore', ('ignore', ','.join(igns)))
 
     def remove_ignore(self, rb_id):
         igns = self.ignore
@@ -234,7 +236,7 @@ class AnytaskConfig:
             return True
 
         igns.remove(rb_id)
-        return self._add_optval('COURSE', 'ignore', 'ignore', ','.join(igns))
+        return self._add_optval('COURSE', 'ignore', ('ignore', ','.join(igns)))
 
 
 class ConfigParseError(Exception):
@@ -464,7 +466,7 @@ class AnytaskSynchronizer:
                         logging.info(
                             "Repository '%s' already downloaded. Skip", repo)
                         if args.ask_link:
-                            if self._ask_add_link(solution):
+                            if self._ask_add_link(solution, args):
                                 logging.info("Rechecking needed")
                                 self._sync_solution(solution, args)
                         return
@@ -496,11 +498,11 @@ class AnytaskSynchronizer:
         if dest is not None:
             if self._download(solution, svn_path, dest, args.svn_quiet):
                 if (svn_path == "") and args.ask_link:
-                    if self._ask_add_link(solution):
+                    if self._ask_add_link(solution, args):
                         logging.info("Rechecking needed")
                         self._sync_solution(solution, args)
 
-    def _ask_add_link(self, solution):
+    def _ask_add_link(self, solution, args):
         def get_dirs(path, *exclude):
             return filter(lambda d: (os.path.isdir(os.path.join(path, d)) and
                 (d not in exclude)), os.listdir(path))
@@ -531,6 +533,8 @@ class AnytaskSynchronizer:
         answer = input()
         if answer == '':
             logging.info("Selection canceled")
+            if (args.ignore is not None) and (None in args.ignore):
+                self._anytask.config.add_ignore(solution.svn.review_id)
             return False
 
         try:
@@ -623,7 +627,8 @@ class AnytaskSynchronizer:
                     solution.task.name, solution.task.title) and
                 selected(args.student,
                     solution.student.name, solution.student.repo) and
-                solution.svn.review_id not in self._anytask.config.ignore,
+                (solution.svn is not None and
+                    solution.svn.review_id not in self._anytask.config.ignore),
             self._anytask.solutions)
 
     def __init__(self, anytask):
@@ -678,6 +683,14 @@ def main():
     parser.add_argument(
         '-S', '--students-list',
         action='store_true', help='print list of students')
+    parser.add_argument(
+        '-i', '--ignore', nargs='?',
+        metavar='RB_ID',
+        action='append', help='ignore review')
+    parser.add_argument(
+        '-I', '--no-ignore',
+        metavar='RB_ID',
+        action='append', help='no ignore review')
     parser.add_argument(
         '-r', '--add-relocation', nargs=2,
         metavar=('FROM', 'TO'),
@@ -741,6 +754,22 @@ def main():
         sys.exit(3)
     except AnytaskParseError:
         sys.exit(4)
+
+    auto_ignore = False
+    if args.ignore:
+        for rb_id in args.ignore:
+            if rb_id is not None:
+                anytask.config.add_ignore(rb_id)
+            else:
+                auto_ignore = True
+
+    if auto_ignore and not (args.ask_link and args.force):
+        parser.error("--ignore requires --ask-link and --force")
+
+    if args.no_ignore:
+        for rb_id in args.no_ignore:
+            anytask.config.remove_ignore(rb_id)
+        sys.exit()
 
     if args.students_list:
         for student in sorted(anytask.get_students(), key=lambda x: x.name):
