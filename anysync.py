@@ -175,7 +175,8 @@ class AnytaskConfig:
 
     @property
     def ignore(self):
-        return map(lambda s: s.strip(), self._sect_course['ignore'].split(','))
+        return set(
+            map(lambda s: s.strip(), self._sect_course['ignore'].split(',')))
 
     def _add_optval(self, optname, hname, keyval):
         try:
@@ -220,7 +221,7 @@ class AnytaskConfig:
         return self._remove_optval('RB_LINKS', 'link', link)
 
     def add_ignore(self, rb_id):
-        igns = set(self.ignore)
+        igns = self.ignore
         if rb_id in igns:
             return True
 
@@ -228,7 +229,7 @@ class AnytaskConfig:
         return self._add_optval('COURSE', 'ignore', 'ignore', ','.join(igns))
 
     def remove_ignore(self, rb_id):
-        igns = set(self.ignore)
+        igns = self.ignore
         if rb_id not in igns:
             return True
 
@@ -621,7 +622,8 @@ class AnytaskSynchronizer:
                 selected(args.task,
                     solution.task.name, solution.task.title) and
                 selected(args.student,
-                    solution.student.name, solution.student.repo),
+                    solution.student.name, solution.student.repo) and
+                solution.svn.review_id not in self._anytask.config.ignore,
             self._anytask.solutions)
 
     def __init__(self, anytask):
