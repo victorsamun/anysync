@@ -495,6 +495,10 @@ class AnytaskSynchronizer:
         if dest is None:
             dest = self._make_destination(solution)
 
+        # Dirty fix for svn_path, coz it's calculated from different sources
+        if svn_path:
+            svn_path = svn_path.replace('\\', '/').replace(r'%5C', '/')
+
         if dest is not None:
             if self._download(solution, svn_path, dest, args.svn_quiet):
                 if (svn_path == "") and args.ask_link:
