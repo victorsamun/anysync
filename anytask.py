@@ -6,7 +6,14 @@ import json
 from utils import local_ns
 
 
-__all__ = []
+__all__ = [
+    'AnytaskStudent',
+    'AnytaskTask',
+    'AnytaskSolution',
+    'AnytaskData',
+
+    'AnytaskDataProvider'
+]
 
 
 AnytaskStudent = namedtuple('AnytaskStudent', ('name', 'account'))
@@ -15,14 +22,6 @@ AnytaskSolution = namedtuple(
     'AnytaskSolution',
     ('task_id', 'student', 'svn_rev', 'svn_path'))
 AnytaskData = namedtuple('AnytaskData', ('students', 'tasks', 'solutions'))
-
-
-class AnytaskParseError(Exception):
-    def __init__(self, msg):
-        self.message = msg
-
-    def __str__(self):
-        return self.message
 
 
 class _AnytaskParser:
